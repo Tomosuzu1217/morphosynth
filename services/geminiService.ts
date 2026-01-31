@@ -57,7 +57,14 @@ export const generateSimulation = async (prompt: string): Promise<AISimulationRe
     [[ VISUAL IRIDESCENCE ]]
     - iridescenceIntensity: 0.0-1.0 (薄膜干渉/虹色反射の強度)
     - Higher values for more rainbow-like, oil-slick reflections
-    
+
+    [[ RENDER MODE & TRANSPARENCY ]]
+    - renderMode: "PBR" (standard metallic) or "TRANSPARENT_THEME" (glass-like, theme image refracts through surface)
+    - Use TRANSPARENT_THEME for: glass, crystal, water, ice, ethereal, dream, ghost, transparent themes
+    - Use PBR for: metal, rock, solid, opaque themes
+    - transparencyLevel: 0.0-1.0 (how see-through the surface is, only for TRANSPARENT_THEME)
+    - fresnelPower: 1.0-5.0 (edge reflection sharpness; 2.0=soft glass, 5.0=sharp crystal)
+
     Choose a shapeType from: LEVITROPE, HOUSEHOLD, VOXEL, PARTICLES, COMPLEX, SLIME.`,
     config: {
       systemInstruction: `You are the MORPHOSYNTH ENGINE.
@@ -72,7 +79,10 @@ export const generateSimulation = async (prompt: string): Promise<AISimulationRe
       6. styleRatio (0.0-1.0): 0.0=坂本龍一(ambient), 1.0=小室哲哉(trance).
       7. bpm: Match the styleRatio. Low ratio → 60-80, High ratio → 120-150.
       8. gateIntensity (0.0-1.0): Trance gate depth. Higher for Komuro style.
-      9. iridescenceIntensity (0.0-1.0): Rainbow reflection strength.`,
+      9. iridescenceIntensity (0.0-1.0): Rainbow reflection strength.
+      10. renderMode: "PBR" or "TRANSPARENT_THEME". Choose based on theme.
+      11. transparencyLevel (0.0-1.0): Glass transparency. 0.3=frosted, 0.7=clear glass.
+      12. fresnelPower (1.0-5.0): Fresnel edge sharpness.`,
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
@@ -109,7 +119,10 @@ export const generateSimulation = async (prompt: string): Promise<AISimulationRe
               shadowIntensity: { type: Type.NUMBER },
               objectCount: { type: Type.NUMBER },
               fusionFactor: { type: Type.NUMBER },
-              iridescenceIntensity: { type: Type.NUMBER }
+              iridescenceIntensity: { type: Type.NUMBER },
+              renderMode: { type: Type.STRING },
+              transparencyLevel: { type: Type.NUMBER },
+              fresnelPower: { type: Type.NUMBER }
             },
             required: ["shapeType", "colorPalette", "objectCount", "cameraMode", "shadowIntensity"]
           },

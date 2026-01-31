@@ -18,6 +18,8 @@ export enum ShapeType {
 
 export type CameraMode = 'ORBIT' | 'DRONE' | 'MACRO' | 'CINEMATIC_PAN' | 'ZOOM_PULSE' | 'INTERACTIVE' | 'STATIC_WIDE' | 'PUSH_IN' | 'DOLLY_ZOOM' | 'TRACKING_ARC' | 'HANDHELD';
 
+export type RenderMode = 'PBR' | 'TRANSPARENT_THEME';
+
 export type MusicStyle = 'SAKAMOTO' | 'ELECTRONIC' | 'GLITCH' | 'AMBIENT';
 
 export interface SimulationParams {
@@ -55,6 +57,9 @@ export interface SimulationParams {
   objectCount: number;
   fusionFactor: number; // 0 to 1, how much objects cluster/fuse
   iridescenceIntensity?: number; // 薄膜干渉（虹色反射）の強度 0.0-1.0
+  renderMode?: RenderMode;       // 'PBR' | 'TRANSPARENT_THEME'
+  transparencyLevel?: number;    // 透過度 0.0-1.0
+  fresnelPower?: number;         // フレネル鋭度 1.0-5.0
 }
 
 export interface SoundParams {

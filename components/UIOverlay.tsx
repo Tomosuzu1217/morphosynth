@@ -89,6 +89,23 @@ const UIOverlay: React.FC<UIOverlayProps> = ({ params, onGenerate, onParamChange
           <Slider label="Spec_Boost" val={params.shadowIntensity} min={0} max={5} step={0.1} onChange={v => onParamChange({ shadowIntensity: v })} />
           <Slider label="Iridescence" val={params.iridescenceIntensity ?? 0.5} min={0} max={1} step={0.01} onChange={v => onParamChange({ iridescenceIntensity: v })} />
 
+          <div className="mt-6 mb-5 border-b border-white/20 pb-1 font-bold text-white/60">TRANSPARENCY</div>
+          <div className="mb-3">
+            <div className="flex justify-between mb-1.5 opacity-60"><span>Render_Mode</span></div>
+            <div className="flex gap-1">
+              <button
+                onClick={() => onParamChange({ renderMode: 'PBR' })}
+                className={`flex-1 text-[6px] py-1 border transition-all ${params.renderMode !== 'TRANSPARENT_THEME' ? 'border-white/60 bg-white/10 text-white' : 'border-white/10 text-white/30'}`}
+              >PBR</button>
+              <button
+                onClick={() => onParamChange({ renderMode: 'TRANSPARENT_THEME' })}
+                className={`flex-1 text-[6px] py-1 border transition-all ${params.renderMode === 'TRANSPARENT_THEME' ? 'border-white/60 bg-white/10 text-white' : 'border-white/10 text-white/30'}`}
+              >GLASS</button>
+            </div>
+          </div>
+          <Slider label="Transparency" val={params.transparencyLevel ?? 0.6} min={0} max={1} step={0.01} onChange={v => onParamChange({ transparencyLevel: v })} />
+          <Slider label="Fresnel_Edge" val={params.fresnelPower ?? 3.0} min={1} max={5} step={0.1} onChange={v => onParamChange({ fresnelPower: v })} />
+
           <div className="mt-6 mb-3 border-b border-white/20 pb-1 font-bold text-cyan-400/80">
             <span className="text-white/40">SOUND_MATRIX</span>
           </div>

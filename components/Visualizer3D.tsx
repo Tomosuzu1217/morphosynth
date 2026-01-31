@@ -7,7 +7,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { SAOPass } from 'three/addons/postprocessing/SAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { SimulationParams, ShapeType } from '../types';
+import { SimulationParams, ShapeType, RenderMode } from '../types';
 import { audioEngine } from '../services/audioEngine';
 
 interface Visualizer3DProps {
@@ -46,6 +46,140 @@ const noise3D = (x: number, y: number, z: number, t: number): number => {
     Math.sin(x * 0.7 - t * 0.5) * Math.cos(z * 0.9 + t * 0.3) * 0.5;
 };
 
+// === Custom Transparent Theme Shader（テーマ画像透過マッピング + フレネル）===
+const THEME_VERTEX_SHADER = `
+varying vec3 vWorldPosition;
+varying vec3 vWorldNormal;
+varying vec2 vUv;
+varying vec3 vViewDir;
+
+void main() {
+  vUv = uv;
+  vec4 worldPos = modelMatrix * vec4(position, 1.0);
+  vWorldPosition = worldPos.xyz;
+  vWorldNormal = normalize(mat3(modelMatrix) * normal);
+  vViewDir = normalize(cameraPosition - worldPos.xyz);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const THEME_FRAGMENT_SHADER = `
+precision highp float;
+
+uniform sampler2D uThemeTexture;
+uniform bool uHasTexture;
+uniform float uTime;
+uniform float uFresnelPower;
+uniform float uTransmission;
+uniform float uIridescence;
+uniform float uMetalness;
+uniform float uRoughness;
+uniform vec3 uBaseColor;
+uniform vec3 uEmissive;
+uniform float uEmissiveIntensity;
+uniform float uBandsLow;
+uniform float uBandsMid;
+uniform float uBandsHigh;
+uniform vec3 uLightDir;
+uniform float uIridescencePhase;
+uniform float uIOR;
+
+varying vec3 vWorldPosition;
+varying vec3 vWorldNormal;
+varying vec2 vUv;
+varying vec3 vViewDir;
+
+#define PI 3.14159265359
+#define TAU 6.28318530718
+
+float schlickFresnel(float cosT, float f0) {
+  return f0 + (1.0 - f0) * pow(clamp(1.0 - cosT, 0.0, 1.0), uFresnelPower);
+}
+
+vec3 thinFilm(float cosT, float phase) {
+  float d = cosT * 6.0;
+  return vec3(
+    sin(d * 2.0 + phase) * 0.5 + 0.5,
+    sin(d * 2.0 + phase + TAU / 3.0) * 0.5 + 0.5,
+    sin(d * 2.0 + phase + TAU * 2.0 / 3.0) * 0.5 + 0.5
+  );
+}
+
+vec2 dirToEquirect(vec3 d) {
+  return vec2(
+    atan(d.z, d.x) / TAU + 0.5,
+    asin(clamp(d.y, -1.0, 1.0)) / PI + 0.5
+  );
+}
+
+void main() {
+  vec3 N = normalize(vWorldNormal);
+  if (!gl_FrontFacing) N = -N;
+  vec3 V = normalize(vViewDir);
+  float NdV = max(dot(N, V), 0.001);
+
+  // Fresnel-Schlick
+  float f0 = mix(0.04, 1.0, uMetalness);
+  float F = schlickFresnel(NdV, f0);
+
+  // Refraction / Reflection directions
+  vec3 refractD = refract(-V, N, 1.0 / uIOR);
+  if (length(refractD) < 0.001) refractD = -V; // total internal reflection fallback
+  vec3 reflectD = reflect(-V, N);
+
+  // Sample theme texture via equirectangular mapping
+  vec3 txCol, rfCol;
+  if (uHasTexture) {
+    txCol = texture2D(uThemeTexture, dirToEquirect(refractD)).rgb;
+    rfCol = texture2D(uThemeTexture, dirToEquirect(reflectD)).rgb;
+  } else {
+    // Procedural dark gradient fallback
+    float g = dot(reflectD, vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5;
+    rfCol = mix(vec3(0.02, 0.02, 0.06), vec3(0.1, 0.08, 0.15), g);
+    txCol = rfCol * 0.6;
+  }
+
+  // Thin-film iridescence（薄膜干渉）
+  vec3 iri = thinFilm(NdV, uIridescencePhase);
+
+  // Simplified PBR lighting
+  vec3 L = normalize(uLightDir);
+  float NdL = max(dot(N, L), 0.0);
+  vec3 H = normalize(V + L);
+  float NdH = max(dot(N, H), 0.0);
+  float sp = exp2(10.0 * (1.0 - uRoughness));
+  float spec = pow(NdH, sp) * (sp + 2.0) / 8.0;
+
+  // Transmission factor（音声反応性あり）
+  float trans = (1.0 - F) * uTransmission;
+  trans += uBandsLow * 0.15;
+  trans = clamp(trans, 0.0, 1.0);
+
+  // Combine: Fresnel blends refraction vs reflection
+  vec3 col = mix(txCol, rfCol, F);
+  col = mix(col, col * iri, uIridescence + uBandsMid * 0.2);
+  col += uBaseColor * NdL * (1.0 - uMetalness) * 0.2;
+  col += spec * mix(vec3(1.0), uBaseColor, uMetalness) * 0.4;
+  col += uEmissive * uEmissiveIntensity;
+  col += iri * uBandsHigh * 0.12;
+  col += uBaseColor * 0.03;
+
+  // Alpha: perpendicular = transparent, grazing = opaque
+  float a = mix(1.0 - trans, 1.0, F);
+  a = clamp(a, 0.1, 0.95);
+
+  gl_FragColor = vec4(col, a);
+}
+`;
+
+// 1x1 fallback texture for shader when no theme image loaded
+const createDefaultTexture = (): THREE.DataTexture => {
+  const data = new Uint8Array([10, 10, 30, 255]);
+  const tex = new THREE.DataTexture(data, 1, 1, THREE.RGBAFormat);
+  tex.needsUpdate = true;
+  return tex;
+};
+
 const Visualizer3D: React.FC<Visualizer3DProps> = ({ params, backgroundUrl }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -63,6 +197,8 @@ const Visualizer3D: React.FC<Visualizer3DProps> = ({ params, backgroundUrl }) =>
   const fieldRingsRef = useRef<THREE.Mesh[]>([]);
   // 薄膜干渉の位相オフセット（動的虹色）
   const iridescencePhaseRef = useRef(0);
+  // カスタムシェーダー用デフォルトテクスチャ
+  const defaultTextureRef = useRef<THREE.DataTexture>(createDefaultTexture());
 
   const paramsRef = useRef(params);
   const originalPositionsMap = useRef<Map<THREE.Mesh, Float32Array>>(new Map());
@@ -88,7 +224,16 @@ const Visualizer3D: React.FC<Visualizer3DProps> = ({ params, backgroundUrl }) =>
         sceneRef.current.background = texture;
         sceneRef.current.environment = texture;
       }
-      console.log("✅ Background texture loaded and applied");
+      // カスタムシェーダーマテリアルのテクスチャを更新
+      if (meshRef.current) {
+        meshRef.current.traverse(child => {
+          if (child instanceof THREE.Mesh && child.material instanceof THREE.ShaderMaterial && child.material.uniforms.uThemeTexture) {
+            child.material.uniforms.uThemeTexture.value = texture;
+            child.material.uniforms.uHasTexture.value = true;
+          }
+        });
+      }
+      console.log("✅ Background texture loaded and applied (PBR + Shader)");
     });
   }, [backgroundUrl]);
 
@@ -273,15 +418,27 @@ const Visualizer3D: React.FC<Visualizer3DProps> = ({ params, backgroundUrl }) =>
               child.geometry.computeVertexNormals();
             }
 
-            // === マテリアル動的更新（虹色を「走らせる」）===
+            // === マテリアル動的更新 ===
             if (child.material instanceof THREE.MeshPhysicalMaterial) {
-              // 粗さをノイズで揺らす（一様でない金属感）
+              // PBRモード: 粗さをノイズで揺らす（一様でない金属感）
               const roughnessNoise = 0.15 + Math.sin(time * 0.5) * 0.1 + bands.high * 0.15;
               child.material.roughness = Math.max(0.05, Math.min(0.35, roughnessNoise));
 
               // 薄膜干渉の強度を動的に（中域で膜の厚み）
               const iridescenceDynamic = 0.4 + Math.sin(iridescencePhaseRef.current) * 0.3 + bands.mid * 0.2;
               child.material.iridescence = Math.max(0.3, Math.min(0.8, iridescenceDynamic));
+            } else if (child.material instanceof THREE.ShaderMaterial && child.material.uniforms.uTime) {
+              // TRANSPARENT_THEMEモード: シェーダーuniform更新
+              const u = child.material.uniforms;
+              u.uTime.value = time;
+              u.uBandsLow.value = bands.low;
+              u.uBandsMid.value = bands.mid;
+              u.uBandsHigh.value = bands.high;
+              u.uIridescencePhase.value = iridescencePhaseRef.current;
+              // 動的な粗さ変動
+              u.uRoughness.value = Math.max(0.05, Math.min(0.35, 0.15 + Math.sin(time * 0.5) * 0.1 + bands.high * 0.15));
+              // 動的な虹色強度
+              u.uIridescence.value = Math.max(0.2, Math.min(0.9, 0.4 + Math.sin(iridescencePhaseRef.current) * 0.3 + bands.mid * 0.2));
             }
 
             // 浮遊（重力からの解放）
@@ -388,6 +545,46 @@ const Visualizer3D: React.FC<Visualizer3DProps> = ({ params, backgroundUrl }) =>
       return mat;
     };
 
+    // === カスタムシェーダーマテリアル（テーマ画像透過 + フレネル）===
+    const createThemeMaterial = () => {
+      const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+      const safeValue = (v: number | undefined, fallback: number) => {
+        const val = v ?? fallback;
+        return isNaN(val) || !isFinite(val) ? fallback : val;
+      };
+
+      const hasTexture = !!backgroundTextureRef.current;
+      const themeTexture = backgroundTextureRef.current || defaultTextureRef.current;
+
+      return new THREE.ShaderMaterial({
+        uniforms: {
+          uThemeTexture: { value: themeTexture },
+          uHasTexture: { value: hasTexture },
+          uTime: { value: 0.0 },
+          uFresnelPower: { value: clamp(safeValue(params.fresnelPower, 3.0), 1.0, 5.0) },
+          uTransmission: { value: clamp(safeValue(params.transparencyLevel, 0.6), 0.0, 1.0) },
+          uIridescence: { value: clamp(safeValue(params.iridescenceIntensity, 0.5), 0.0, 1.0) },
+          uMetalness: { value: clamp(params.metalness ?? 0.3, 0.0, 1.0) },
+          uRoughness: { value: clamp(params.roughness ?? 0.15, 0.0, 1.0) },
+          uBaseColor: { value: new THREE.Color(params.colorPalette[0] || '#ccccdd') },
+          uEmissive: { value: new THREE.Color(params.emissiveColor || '#0a0a15') },
+          uEmissiveIntensity: { value: params.emissiveIntensity ?? 0.02 },
+          uBandsLow: { value: 0.0 },
+          uBandsMid: { value: 0.0 },
+          uBandsHigh: { value: 0.0 },
+          uLightDir: { value: new THREE.Vector3(50, 100, 50).normalize() },
+          uIridescencePhase: { value: 0.0 },
+          uIOR: { value: clamp(params.ior ?? 1.5, 1.0, 3.0) },
+        },
+        vertexShader: THEME_VERTEX_SHADER,
+        fragmentShader: THEME_FRAGMENT_SHADER,
+        transparent: true,
+        side: THREE.DoubleSide,
+        depthWrite: true,
+        depthTest: true,
+      });
+    };
+
     // === 形状生成（2〜5の核が融合する設計）===
     const getGeometry = (type: ShapeType): THREE.BufferGeometry => {
       const size = 4 + Math.random() * 4;
@@ -477,9 +674,12 @@ const Visualizer3D: React.FC<Visualizer3DProps> = ({ params, backgroundUrl }) =>
     const count = Math.min(Math.max(params.objectCount || 3, 2), 5); // 2〜5個
     const fusionRadius = 8; // 融合距離
 
+    const useThemeShader = params.renderMode === 'TRANSPARENT_THEME';
+
     for (let i = 0; i < count; i++) {
       const geo = getGeometry(params.shapeType);
-      const mesh = new THREE.Mesh(geo, createMaterial());
+      const material = useThemeShader ? createThemeMaterial() : createMaterial();
+      const mesh = new THREE.Mesh(geo, material);
 
       // 中央に集まりつつ少しオフセット（融合感）
       const angle = (i / count) * Math.PI * 2;

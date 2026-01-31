@@ -41,7 +41,10 @@ const INITIAL_DATA: AISimulationResponse = {
         shadowIntensity: 1.5,
         objectCount: 8,
         fusionFactor: 0.35,
-        iridescenceIntensity: 0.5
+        iridescenceIntensity: 0.5,
+        renderMode: 'TRANSPARENT_THEME',
+        transparencyLevel: 0.6,
+        fresnelPower: 3.0
     },
     sound: {
         baseFrequency: 55.0,
